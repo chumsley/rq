@@ -19,6 +19,7 @@ from rq.worker import WorkerStatus
 red = partial(click.style, fg='red')
 green = partial(click.style, fg='green')
 yellow = partial(click.style, fg='yellow')
+cyan = partial(click.style, fg='cyan')
 
 
 def read_config_file(module):
@@ -95,7 +96,6 @@ def state_symbol(state):
         return symbols[state]
     except KeyError:
         return state
-
 
 def show_queues(queues, raw, by_queue, queue_class, worker_class):
     if queues:

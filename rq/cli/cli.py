@@ -12,18 +12,19 @@ import sys
 import click
 from redis.exceptions import ConnectionError
 
-from rq import Connection, get_failed_queue, __version__ as version
+from rq import Connection, get_failed_queue, __version__ as version, Queue, Worker
 from rq.cli.helpers import (read_config_file, refresh,
                             setup_loghandlers_from_args,
-                            show_both, show_queues, show_workers, CliConfig)
+                            show_both, show_queues, show_workers, CliConfig,
+                            cyan as hdr, state_symbol)
 from rq.contrib.legacy import cleanup_ghosts
 from rq.defaults import (DEFAULT_CONNECTION_CLASS, DEFAULT_JOB_CLASS,
                          DEFAULT_QUEUE_CLASS, DEFAULT_WORKER_CLASS)
-from rq.exceptions import InvalidJobOperationError
+from rq.exceptions import InvalidJobOperationError, NoSuchJobError
 from rq.utils import import_attribute
 from rq.suspension import (suspend as connection_suspend,
                            resume as connection_resume, is_suspended)
-
+from rq.job import JobStatus
 
 # Disable the warning that Click displays (as of Click version 5.0) when users
 # use unicode_literals in Python 2.
@@ -264,3 +265,38 @@ def resume(cli_config, **options):
     """Resumes processing of queues, that where suspended with `rq suspend`"""
     connection_resume(cli_config.connection)
     click.echo("Resuming workers.")
+
+
+@main.command()
+@click.option('--path', '-P', default='.', help='Specify the import path.')
+@click.argument('queues', nargs=-1)
+@pass_cli_config
+def inspect(cli_config, path, queues, **options):
+    with Connection(cli_config.connection):
+        if path:
+            sys.path = path.split(':') + sys.path
+        if queues:
+            qs = list(map(Queue, queues))
+        else:
+            qs = Queue.all()
+
+        for q in qs:
+            for jobid in q.get_job_ids():
+                try:
+                    job = q.job_class.fetch(jobid)
+                except NoSuchJobError:
+                    click.echo("Removing orphan jobid %s from %s" % (jobid, q.name))
+                    q.remove(jobid)
+
+                qstr = q.name if (job.origin is None or job.origin == q.name) else "%s<%s" % (q.name, job.origin)
+                click.echo("%s: %s [%s]" % (hdr(job.description), job.status, qstr))
+                if job.exc_info and job.status != JobStatus.STARTED:
+                    click.echo(job.exc_info)
+
+        ws = Worker.all()
+        for w in ws:
+            job = w.get_current_job()
+            click.echo("%s %s: %s: [%s %s]" % (w.name, state_symbol(w.get_state()),
+                                               hdr(job.description), job.status, job.started_at))
+            if job.exc_info and job.status != JobStatus.STARTED:
+                click.echo(job.exc_info)
